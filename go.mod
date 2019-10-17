@@ -1,3 +1,3 @@
-module github.com/sokurenko/go-netstat
+module github.com/nberlee/go-netstat
 
-go 1.13
+go 1.20
