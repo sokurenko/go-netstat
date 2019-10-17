@@ -79,10 +79,10 @@ func parseIPv6(s string) (net.IP, error) {
 	for len(s) != 0 {
 		grp := s[0:8]
 		u, err := strconv.ParseUint(grp, 16, 32)
-		binary.LittleEndian.PutUint32(ip[i:j], uint32(u))
 		if err != nil {
 			return nil, err
 		}
+		binary.LittleEndian.PutUint32(ip[i:j], uint32(u))
 		i, j = i+grpLen, j+grpLen
 		s = s[8:]
 	}
