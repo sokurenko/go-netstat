@@ -21,59 +21,104 @@ Usage of ./go-netstat:
 ### Installation:
 
 ```
-$ go get github.com/cakturk/go-netstat
+$ go get github.com/sokurneko/go-netstat
 ```
 
 ### Using as a library
 #### [Godoc](https://godoc.org/github.com/cakturk/go-netstat/netstat)
 #### Getting the package
 ```
-$ go get github.com/cakturk/go-netstat/netstat
+$ go mod init tcp_count
+$ go mod tidy
+$ go run tcp_count.go
 ```
 
 ```go
-import (
-	"fmt"
+package main
 
-	"github.com/cakturk/go-netstat/netstat"
+import (
+	"errors"
+	"fmt"
+	"net"
+	"os"
+
+	"github.com/sokurenko/go-netstat/netstat"
 )
 
-func displaySocks() error {
-	// UDP sockets
-	socks, err := netstat.UDPSocks(netstat.NoopFilter)
-	if err != nil {
-		return err
-	}
-	for _, e := range socks {
-		fmt.Printf("%v\n", e)
-	}
+func netStatTcpCount(laddres net.IP, lNet *net.IPNet, lport int, raddres net.IP, rNet *net.IPNet, rport int,
+	state netstat.SkState) (result int, err error) {
+	count := 0
 
-	// TCP sockets
-	socks, err = netstat.TCPSocks(netstat.NoopFilter)
-	if err != nil {
-		return err
-	}
-	for _, e := range socks {
-		fmt.Printf("%v\n", e)
-	}
+	_, err = netstat.TCPSocks(func(s *netstat.SockTabEntry) bool {
+		if state != 0 && s.State != state {
+			return false
+		}
+		if lport != 0 && s.LocalAddr.Port != uint16(lport) {
+			return false
+		}
+		if laddres != nil && !s.LocalAddr.IP.Equal(laddres) {
+			return false
+		}
+		if lNet != nil && !lNet.Contains(s.LocalAddr.IP) {
+			return false
+		}
+		if rport != 0 && s.RemoteAddr.Port != uint16(rport) {
+			return false
+		}
+		if raddres != nil && !s.RemoteAddr.IP.Equal(raddres) {
+			return false
+		}
+		if rNet != nil && !rNet.Contains(s.RemoteAddr.IP) {
+			return false
+		}
 
-	// get only listening TCP sockets
-	tabs, err := netstat.TCPSocks(func(s *netstat.SockTabEntry) bool {
-		return s.State == netstat.Listen
+		count++
+		return false
 	})
 	if err != nil {
-		return err
-	}
-	for _, e := range tabs {
-		fmt.Printf("%v\n", e)
+		return 0, err
 	}
 
-	// list all the TCP sockets in state FIN_WAIT_1 for your HTTP server
-	tabs, err = netstat.TCPSocks(func(s *netstat.SockTabEntry) bool {
-		return s.State == netstat.FinWait1 && s.LocalAddr.Port == 80
+	_, err = netstat.TCP6Socks(func(s *netstat.SockTabEntry) bool {
+		if state != 0 && s.State != state {
+			return false
+		}
+		if lport != 0 && s.LocalAddr.Port != uint16(lport) {
+			return false
+		}
+		if laddres != nil && !s.LocalAddr.IP.Equal(laddres) {
+			return false
+		}
+		if lNet != nil && !lNet.Contains(s.LocalAddr.IP) {
+			return false
+		}
+		if rport != 0 && s.RemoteAddr.Port != uint16(rport) {
+			return false
+		}
+		if raddres != nil && !s.RemoteAddr.IP.Equal(raddres) {
+			return false
+		}
+		if rNet != nil && !rNet.Contains(s.RemoteAddr.IP) {
+			return false
+		}
+		count++
+		return false
 	})
-	// error handling, etc.
 
-	return nil
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return 0, err
+	}
+
+	return count, nil
+}
+
+func main() {
+	count, err := netStatTcpCount(nil, nil, 0, nil, nil, 0, netstat.Listen)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	fmt.Println("count:", count)
 }
 ```
