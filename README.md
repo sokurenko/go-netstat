@@ -1,4 +1,4 @@
-###  This fork avoids costly process info extraction if AcceptFn returned false both on Linux and Windows. AcceptFn can calculate sockets count without ever returning true.
+###  This fork avoids costly process info extraction if unnecessary, to skip process info extraction AcceptFn should calculate sockets count internally and always return false.
 
 ```
 Usage of ./go-netstat:
