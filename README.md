@@ -17,11 +17,6 @@ Usage of ./go-netstat:
   -udp
     	display UDP sockets
 ```
-### Installation:
-
-```
-$ go get github.com/sokurenko/go-netstat
-```
 
 ### Using as a library
 #### [Godoc](https://godoc.org/github.com/cakturk/go-netstat/netstat)
