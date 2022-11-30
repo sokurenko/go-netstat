@@ -1,4 +1,4 @@
-###  To avoid high CPU usage on Linux and on Window, this fork avoids costly process info extraction if AcceptFn calculated sockets count internally and returned false for each socket.
+###  To avoid high CPU usage on Linux and Windows, this fork avoids costly process info extraction if AcceptFn calculated sockets count internally and returned false for each socket.
 
 ```
 Usage of ./go-netstat:
