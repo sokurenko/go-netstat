@@ -20,7 +20,7 @@ Usage of ./go-netstat:
 ### Installation:
 
 ```
-$ go get github.com/sokurneko/go-netstat
+$ go get github.com/sokurenko/go-netstat
 ```
 
 ### Using as a library
