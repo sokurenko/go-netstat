@@ -10,8 +10,6 @@ import (
 )
 
 var (
-	udp       = flag.Bool("udp", false, "display UDP sockets")
-	tcp       = flag.Bool("tcp", false, "display TCP sockets")
 	listening = flag.Bool("lis", false, "display only listening sockets")
 	all       = flag.Bool("all", false, "display both listening and non-listening sockets")
 	resolve   = flag.Bool("res", false, "lookup symbolic names for host addresses")
@@ -49,55 +47,31 @@ func main() {
 	}
 	fmt.Printf("Proto %-23s %-23s %-12s %-16s\n", "Local Addr", "Foreign Addr", "State", "PID/Program name")
 
-	if *udp {
-		if proto&protoIPv4 == protoIPv4 {
-			tabs, err := netstat.UDPSocks(netstat.NoopFilter)
-			if err == nil {
-				displaySockInfo("udp", tabs)
-			}
+	var fn netstat.AcceptFn
+
+	switch {
+	case *all:
+		fn = func(*netstat.SockTabEntry) bool { return true }
+	case *listening:
+		fn = func(s *netstat.SockTabEntry) bool {
+			return s.State == netstat.Listen
 		}
-		if proto&protoIPv6 == protoIPv6 {
-			tabs, err := netstat.UDP6Socks(netstat.NoopFilter)
-			if err == nil {
-				displaySockInfo("udp6", tabs)
-			}
+	default:
+		fn = func(s *netstat.SockTabEntry) bool {
+			return s.State != netstat.Listen
 		}
-	} else {
-		*tcp = true
 	}
 
-	if *tcp {
-		var fn netstat.AcceptFn
-
-		switch {
-		case *all:
-			fn = func(*netstat.SockTabEntry) bool { return true }
-		case *listening:
-			fn = func(s *netstat.SockTabEntry) bool {
-				return s.State == netstat.Listen
-			}
-		default:
-			fn = func(s *netstat.SockTabEntry) bool {
-				return s.State != netstat.Listen
-			}
-		}
-
-		if proto&protoIPv4 == protoIPv4 {
-			tabs, err := netstat.TCPSocks(fn)
-			if err == nil {
-				displaySockInfo("tcp", tabs)
-			}
-		}
-		if proto&protoIPv6 == protoIPv6 {
-			tabs, err := netstat.TCP6Socks(fn)
-			if err == nil {
-				displaySockInfo("tcp6", tabs)
-			}
+	if proto&protoIPv4 == protoIPv4 {
+		tabs, err := netstat.Netstat(fn)
+		if err == nil {
+			displaySockInfo(tabs)
 		}
 	}
+
 }
 
-func displaySockInfo(proto string, s []netstat.SockTabEntry) {
+func displaySockInfo(s []netstat.SockTabEntry) {
 	lookup := func(skaddr *netstat.SockAddr) string {
 		const IPv4Strlen = 17
 		addr := skaddr.IP.String()
@@ -120,6 +94,6 @@ func displaySockInfo(proto string, s []netstat.SockTabEntry) {
 		}
 		saddr := lookup(e.LocalAddr)
 		daddr := lookup(e.RemoteAddr)
-		fmt.Printf("%-5s %-23.23s %-23.23s %-12s %-16s\n", proto, saddr, daddr, e.State, p)
+		fmt.Printf("%-5s %-23.23s %-23.23s %-12s %-16s\n", e.Proto, saddr, daddr, e.State, p)
 	}
 }

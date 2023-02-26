@@ -23,6 +23,7 @@ type SockTabEntry struct {
 	State      SkState
 	UID        uint32
 	Process    *Process
+	Proto      string
 }
 
 // Process holds the PID and process Name to which each socket belongs
@@ -48,27 +49,3 @@ type AcceptFn func(*SockTabEntry) bool
 
 // NoopFilter - a test function returning true for all elements
 func NoopFilter(*SockTabEntry) bool { return true }
-
-// TCPSocks returns a slice of active TCP sockets containing only those
-// elements that satisfy the accept function
-func TCPSocks(accept AcceptFn) ([]SockTabEntry, error) {
-	return osTCPSocks(accept)
-}
-
-// TCP6Socks returns a slice of active TCP IPv4 sockets containing only those
-// elements that satisfy the accept function
-func TCP6Socks(accept AcceptFn) ([]SockTabEntry, error) {
-	return osTCP6Socks(accept)
-}
-
-// UDPSocks returns a slice of active UDP sockets containing only those
-// elements that satisfy the accept function
-func UDPSocks(accept AcceptFn) ([]SockTabEntry, error) {
-	return osUDPSocks(accept)
-}
-
-// UDP6Socks returns a slice of active UDP IPv6 sockets containing only those
-// elements that satisfy the accept function
-func UDP6Socks(accept AcceptFn) ([]SockTabEntry, error) {
-	return osUDP6Socks(accept)
-}

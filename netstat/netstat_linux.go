@@ -113,7 +113,7 @@ func parseAddr(s string) (*SockAddr, error) {
 	return &SockAddr{IP: ip, Port: uint16(v)}, nil
 }
 
-func parseSocktab(r io.Reader, accept AcceptFn) ([]SockTabEntry, error) {
+func parseSocktab(r io.Reader, accept AcceptFn, proto string) ([]SockTabEntry, error) {
 	br := bufio.NewScanner(r)
 	tab := make([]SockTabEntry, 0, 4)
 
@@ -125,11 +125,11 @@ func parseSocktab(r io.Reader, accept AcceptFn) ([]SockTabEntry, error) {
 		line := br.Text()
 		// Skip comments
 		if i := strings.Index(line, "#"); i >= 0 {
-			line = line[:i]
+			continue
 		}
 		fields := strings.Fields(line)
 		if len(fields) < 12 {
-			return nil, fmt.Errorf("netstat: not enough fields: %v, %v", len(fields), fields)
+			return nil, fmt.Errorf("netstat: not enough fields: %d, %v", len(fields), fields)
 		}
 		addr, err := parseAddr(fields[1])
 		if err != nil {
@@ -152,6 +152,7 @@ func parseSocktab(r io.Reader, accept AcceptFn) ([]SockTabEntry, error) {
 		}
 		e.UID = uint32(u)
 		e.ino = fields[9]
+		e.Proto = proto
 		if accept(&e) {
 			tab = append(tab, e)
 		}
@@ -174,10 +175,7 @@ func getProcName(s []byte) string {
 		return ""
 	}
 	j := bytes.LastIndex(s, []byte(")"))
-	if j < 0 {
-		return ""
-	}
-	if i > j {
+	if j < 1 || i+1 >= j {
 		return ""
 	}
 	return string(s[i+1 : j])
@@ -211,10 +209,11 @@ func (p *procFd) iterFdDir() {
 					return
 				}
 				n, err := stat.Read(buf[:])
-				stat.Close()
 				if err != nil {
+					stat.Close()
 					return
 				}
+				stat.Close()
 				z := bytes.SplitN(buf[:n], []byte(" "), 3)
 				name := getProcName(z[1])
 				p.p = &Process{p.pid, name}
@@ -245,45 +244,29 @@ func extractProcInfo(sktab []SockTabEntry) {
 	}
 }
 
-// doNetstat - collect information about network port status
-func doNetstat(path string, fn AcceptFn) ([]SockTabEntry, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
+// Netstat - collect information about network port status
+func Netstat(fn AcceptFn) ([]SockTabEntry, error) {
+	files := []string{pathTCPTab, pathTCP6Tab, pathUDPTab, pathUDP6Tab}
+	var combinedTabs []SockTabEntry
+
+	for _, file := range files {
+		f, err := os.Open(file)
+		if err != nil {
+			return nil, err
+		}
+		proto, _ := strings.CutPrefix(file, "/proc/net/")
+		tabs, err := parseSocktab(f, fn, proto)
+		if err != nil {
+			f.Close()
+			return nil, err
+		}
+		f.Close()
+		combinedTabs = append(combinedTabs, tabs...)
 	}
-	tabs, err := parseSocktab(f, fn)
-	f.Close()
-	if err != nil {
-		return nil, err
+
+	if len(combinedTabs) != 0 {
+		extractProcInfo(combinedTabs)
 	}
 
-	if len(tabs) != 0 {
-		extractProcInfo(tabs)
-	}
-
-	return tabs, nil
-}
-
-// TCPSocks returns a slice of active TCP sockets containing only those
-// elements that satisfy the accept function
-func osTCPSocks(accept AcceptFn) ([]SockTabEntry, error) {
-	return doNetstat(pathTCPTab, accept)
-}
-
-// TCP6Socks returns a slice of active TCP IPv4 sockets containing only those
-// elements that satisfy the accept function
-func osTCP6Socks(accept AcceptFn) ([]SockTabEntry, error) {
-	return doNetstat(pathTCP6Tab, accept)
-}
-
-// UDPSocks returns a slice of active UDP sockets containing only those
-// elements that satisfy the accept function
-func osUDPSocks(accept AcceptFn) ([]SockTabEntry, error) {
-	return doNetstat(pathUDPTab, accept)
-}
-
-// UDP6Socks returns a slice of active UDP IPv6 sockets containing only those
-// elements that satisfy the accept function
-func osUDP6Socks(accept AcceptFn) ([]SockTabEntry, error) {
-	return doNetstat(pathUDP6Tab, accept)
+	return combinedTabs, nil
 }
