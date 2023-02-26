@@ -204,19 +204,26 @@ func (p *procFd) iterFdDir() {
 				continue
 			}
 			if p.p == nil {
-				stat, err := os.Open(path.Join(p.base, "stat"))
-				if err != nil {
+				if func() error {
+					stat, err := os.Open(path.Join(p.base, "stat"))
+					if err != nil {
+						return err
+					}
+					defer stat.Close()
+
+					n, err := stat.Read(buf[:])
+
+					if err != nil {
+						return err
+					}
+					z := bytes.SplitN(buf[:n], []byte(" "), 3)
+					name := getProcName(z[1])
+					p.p = &Process{p.pid, name}
+
+					return nil
+				}() != nil {
 					return
 				}
-				n, err := stat.Read(buf[:])
-				if err != nil {
-					stat.Close()
-					return
-				}
-				stat.Close()
-				z := bytes.SplitN(buf[:n], []byte(" "), 3)
-				name := getProcName(z[1])
-				p.p = &Process{p.pid, name}
 			}
 			sk.Process = p.p
 		}
@@ -250,17 +257,10 @@ func Netstat(fn AcceptFn) ([]SockTabEntry, error) {
 	var combinedTabs []SockTabEntry
 
 	for _, file := range files {
-		f, err := os.Open(file)
+		tabs, err := openFileStream(file, fn)
 		if err != nil {
 			return nil, err
 		}
-		proto, _ := strings.CutPrefix(file, "/proc/net/")
-		tabs, err := parseSocktab(f, fn, proto)
-		if err != nil {
-			f.Close()
-			return nil, err
-		}
-		f.Close()
 		combinedTabs = append(combinedTabs, tabs...)
 	}
 
@@ -269,4 +269,18 @@ func Netstat(fn AcceptFn) ([]SockTabEntry, error) {
 	}
 
 	return combinedTabs, nil
+}
+
+func openFileStream(file string, fn AcceptFn) ([]SockTabEntry, error) {
+	f, err := os.Open(file)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	proto, _ := strings.CutPrefix(file, "/proc/net/")
+	tabs, err := parseSocktab(f, fn, proto)
+	if err != nil {
+		return nil, err
+	}
+	return tabs, nil
 }
