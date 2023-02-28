@@ -5,25 +5,50 @@ import (
 	"net"
 )
 
-// SockAddr represents an ip:port pair
-type SockAddr struct {
+// SockEndpoint represents an ip:port pair
+type SockEndpoint struct {
 	IP   net.IP
 	Port uint16
 }
 
-func (s *SockAddr) String() string {
+func (s *SockEndpoint) String() string {
 	return fmt.Sprintf("%v:%d", s.IP, s.Port)
 }
 
 // SockTabEntry type represents each line of the /proc/net/[tcp|udp]
+// Kernel >=5.15
 type SockTabEntry struct {
-	ino        string
-	LocalAddr  *SockAddr
-	RemoteAddr *SockAddr
-	State      SkState
-	UID        uint32
-	Process    *Process
-	Proto      string
+	// Layer4 protocol, tcp, tcp6, udp or udp6
+	Proto string
+	// Local IPv4 address + Port
+	LocalEndpoint *SockEndpoint
+	// Remote IPv4 address + Port
+	RemoteEndpoint *SockEndpoint
+	// connection state
+	State SkState
+	// transmit-queue
+	TxQueue uint64
+	// receive-queue
+	RxQueue uint64
+	// timer_active
+	Tr TimerActive
+	// number of jiffies until timer expires
+	TimerWhen uint64
+	// number of unrecovered RTO Retransmission Timeouts
+	Retrnsmt uint64
+	// user ID
+	UID uint32
+	// unanswered 0-window probes
+	Timeout uint64
+	// inode
+	Inode uint64
+	// socket reference count
+	Ref uint64
+	// location of socket in memory
+	Pointer uint64
+	// retransmit timeout
+	Drops   uint64
+	Process *Process
 }
 
 // Process holds the PID and process Name to which each socket belongs
@@ -41,6 +66,13 @@ type SkState uint8
 
 func (s SkState) String() string {
 	return skStates[s]
+}
+
+// TimerActive represents the state of the socket timer
+type TimerActive uint8
+
+func (t TimerActive) String() string {
+	return TimerActives[t]
 }
 
 // AcceptFn is used to filter socket entries. The value returned indicates

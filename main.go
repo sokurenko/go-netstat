@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
 
 	"github.com/nberlee/go-netstat/netstat"
 )
@@ -62,17 +64,26 @@ func main() {
 		}
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt)
+		<-sig
+		cancel()
+	}()
 	if proto&protoIPv4 == protoIPv4 {
-		tabs, err := netstat.Netstat(fn)
+		tabs, err := netstat.Netstat(ctx, fn)
 		if err == nil {
 			displaySockInfo(tabs)
+		} else {
+			fmt.Print(err)
 		}
 	}
 
 }
 
 func displaySockInfo(s []netstat.SockTabEntry) {
-	lookup := func(skaddr *netstat.SockAddr) string {
+	lookup := func(skaddr *netstat.SockEndpoint) string {
 		const IPv4Strlen = 17
 		addr := skaddr.IP.String()
 		if *resolve {
@@ -92,8 +103,8 @@ func displaySockInfo(s []netstat.SockTabEntry) {
 		if e.Process != nil {
 			p = e.Process.String()
 		}
-		saddr := lookup(e.LocalAddr)
-		daddr := lookup(e.RemoteAddr)
+		saddr := lookup(e.LocalEndpoint)
+		daddr := lookup(e.RemoteEndpoint)
 		fmt.Printf("%-5s %-23.23s %-23.23s %-12s %-16s\n", e.Proto, saddr, daddr, e.State, p)
 	}
 }

@@ -173,7 +173,7 @@ func TestGetProcName(t *testing.T) {
 	}
 }
 
-func TestParseSocktab(t *testing.T) {
+func TestParseSockTab(t *testing.T) {
 	testCases := []struct {
 		name           string
 		acceptFn       netstat.AcceptFn
@@ -191,11 +191,11 @@ func TestParseSocktab(t *testing.T) {
 `,
 			expectedResult: []netstat.SockTabEntry{
 				{
-					LocalAddr: &netstat.SockAddr{
+					LocalEndpoint: &netstat.SockEndpoint{
 						IP:   net.ParseIP("127.0.0.1"),
 						Port: 5037,
 					},
-					RemoteAddr: &netstat.SockAddr{
+					RemoteEndpoint: &netstat.SockEndpoint{
 						IP:   net.ParseIP("0.0.0.0"),
 						Port: 0,
 					},
@@ -203,11 +203,11 @@ func TestParseSocktab(t *testing.T) {
 					UID:   0,
 				},
 				{
-					LocalAddr: &netstat.SockAddr{
+					LocalEndpoint: &netstat.SockEndpoint{
 						IP:   net.ParseIP("0.0.0.0"),
 						Port: 22,
 					},
-					RemoteAddr: &netstat.SockAddr{
+					RemoteEndpoint: &netstat.SockEndpoint{
 						IP:   net.ParseIP("0.0.0.0"),
 						Port: 0,
 					},
@@ -228,11 +228,11 @@ func TestParseSocktab(t *testing.T) {
 `,
 			expectedResult: []netstat.SockTabEntry{
 				{
-					LocalAddr: &netstat.SockAddr{
+					LocalEndpoint: &netstat.SockEndpoint{
 						IP:   net.ParseIP("127.0.0.1"),
 						Port: 5037,
 					},
-					RemoteAddr: &netstat.SockAddr{
+					RemoteEndpoint: &netstat.SockEndpoint{
 						IP:   net.ParseIP("0.0.0.0"),
 						Port: 0,
 					},
@@ -253,11 +253,11 @@ func TestParseSocktab(t *testing.T) {
 `,
 			expectedResult: []netstat.SockTabEntry{
 				{
-					LocalAddr: &netstat.SockAddr{
+					LocalEndpoint: &netstat.SockEndpoint{
 						IP:   net.ParseIP("127.0.0.1"),
 						Port: 5037,
 					},
-					RemoteAddr: &netstat.SockAddr{
+					RemoteEndpoint: &netstat.SockEndpoint{
 						IP:   net.ParseIP("0.0.0.0"),
 						Port: 0,
 					},
@@ -278,7 +278,7 @@ func TestParseSocktab(t *testing.T) {
 `,
 			expectedResult: []netstat.SockTabEntry{},
 			expectedLen:    0,
-			expectedError:  fmt.Errorf("netstat: not enough fields: %d, [%s]", 11, "0: 0100007F:13AD 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 107869 1"),
+			expectedError:  fmt.Errorf("expected integer"),
 		},
 		{
 			name: "Local Address failure",
@@ -314,7 +314,7 @@ func TestParseSocktab(t *testing.T) {
 `,
 			expectedResult: []netstat.SockTabEntry{},
 			expectedLen:    0,
-			expectedError:  fmt.Errorf("strconv.ParseUint: parsing \"%s\": %v", "0G", strconv.ErrSyntax),
+			expectedError:  fmt.Errorf("expected space in input to match format"),
 		},
 		{
 			name: "Wrong user",
@@ -326,7 +326,7 @@ func TestParseSocktab(t *testing.T) {
 `,
 			expectedResult: []netstat.SockTabEntry{},
 			expectedLen:    0,
-			expectedError:  fmt.Errorf("strconv.ParseUint: parsing \"%s\": %v", "-1", strconv.ErrSyntax),
+			expectedError:  fmt.Errorf("expected integer"),
 		},
 	}
 	for _, tc := range testCases {
@@ -335,7 +335,7 @@ func TestParseSocktab(t *testing.T) {
 			// Convert the input string to an io.Reader
 			inputReader := strings.NewReader(tc.inputStr)
 			// Call the parseSocktab function and store the result
-			result, err := netstat.ParseSocktab(inputReader, tc.acceptFn, "tcp")
+			result, err := netstat.ParseSockTab(inputReader, tc.acceptFn, "tcp")
 
 			// Check if the function call returned an error
 			if err != nil && tc.expectedError == nil {
@@ -356,19 +356,19 @@ func TestParseSocktab(t *testing.T) {
 			}
 
 			for i, entry := range result {
-				if !entry.LocalAddr.IP.Equal(tc.expectedResult[i].LocalAddr.IP) {
-					t.Errorf("unexpected local IP: got %v, expected %v", entry.LocalAddr.IP, tc.expectedResult[i].LocalAddr.IP)
+				if !entry.LocalEndpoint.IP.Equal(tc.expectedResult[i].LocalEndpoint.IP) {
+					t.Errorf("unexpected local IP: got %v, expected %v", entry.LocalEndpoint.IP, tc.expectedResult[i].LocalEndpoint.IP)
 				}
 
-				if entry.LocalAddr.Port != tc.expectedResult[i].LocalAddr.Port {
-					t.Errorf("unexpected local port: got %v, expected %v", entry.LocalAddr.Port, tc.expectedResult[i].LocalAddr.Port)
+				if entry.LocalEndpoint.Port != tc.expectedResult[i].LocalEndpoint.Port {
+					t.Errorf("unexpected local port: got %v, expected %v", entry.LocalEndpoint.Port, tc.expectedResult[i].LocalEndpoint.Port)
 				}
-				if !entry.RemoteAddr.IP.Equal(tc.expectedResult[i].RemoteAddr.IP) {
-					t.Errorf("unexpected remote IP: got %v, expected %v", entry.RemoteAddr.IP, tc.expectedResult[i].RemoteAddr.IP)
+				if !entry.RemoteEndpoint.IP.Equal(tc.expectedResult[i].RemoteEndpoint.IP) {
+					t.Errorf("unexpected remote IP: got %v, expected %v", entry.RemoteEndpoint.IP, tc.expectedResult[i].RemoteEndpoint.IP)
 				}
 
-				if entry.RemoteAddr.Port != tc.expectedResult[i].RemoteAddr.Port {
-					t.Errorf("unexpected remote port: got %v, expected %v", entry.RemoteAddr.Port, tc.expectedResult[i].RemoteAddr.Port)
+				if entry.RemoteEndpoint.Port != tc.expectedResult[i].RemoteEndpoint.Port {
+					t.Errorf("unexpected remote port: got %v, expected %v", entry.RemoteEndpoint.Port, tc.expectedResult[i].RemoteEndpoint.Port)
 				}
 
 				if entry.State != tc.expectedResult[i].State {

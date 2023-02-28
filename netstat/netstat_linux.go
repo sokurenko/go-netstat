@@ -5,6 +5,7 @@ package netstat
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -12,8 +13,10 @@ import (
 	"net"
 	"os"
 	"path"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 const (
@@ -49,11 +52,28 @@ var skStates = [...]string{
 	"FIN_WAIT1",
 	"FIN_WAIT2",
 	"TIME_WAIT",
-	"", // CLOSE
+	"CLOSE",
 	"CLOSE_WAIT",
 	"LAST_ACK",
 	"LISTEN",
 	"CLOSING",
+}
+
+// socket timer states
+const (
+	Off           TimerActive = 0x00
+	On            TimerActive = 0x01
+	KeepAlive     TimerActive = 0x02
+	TimeWaitTimer TimerActive = 0x03 // Unsure how to call this
+	ProbeTimer    TimerActive = 0x04 // Unsure how to call this
+)
+
+var TimerActives = [...]string{
+	"Off",
+	"On",
+	"KeepAlive",
+	"TimeWait",   // Unsure how to call this
+	"ProbeTimer", // Unsure how to call this
 }
 
 // Errors returned by gonetstat
@@ -88,7 +108,7 @@ func parseIPv6(s string) (net.IP, error) {
 	return ip, nil
 }
 
-func parseAddr(s string) (*SockAddr, error) {
+func parseAddr(s string) (*SockEndpoint, error) {
 	fields := strings.Split(s, ":")
 	if len(fields) < 2 {
 		return nil, fmt.Errorf("netstat: not enough fields: %v", s)
@@ -110,54 +130,56 @@ func parseAddr(s string) (*SockAddr, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &SockAddr{IP: ip, Port: uint16(v)}, nil
+	return &SockEndpoint{IP: ip, Port: uint16(v)}, nil
 }
 
-func parseSocktab(r io.Reader, accept AcceptFn, proto string) ([]SockTabEntry, error) {
-	br := bufio.NewScanner(r)
-	tab := make([]SockTabEntry, 0, 4)
+func parseSockTab(reader io.Reader, accept AcceptFn, proto string) ([]SockTabEntry, error) {
+	scanner := bufio.NewScanner(reader)
+	scanner.Scan()
 
-	// Discard title
-	br.Scan()
+	var sockTab []SockTabEntry
+	for scanner.Scan() {
+		line := scanner.Text()
+		var entry SockTabEntry
+		var localEndpoint, remoteEndpoint string
+		var ignored int64
+		_, err := fmt.Sscanf(line, "%d: %s %s %X %X:%X %d:%X %X %d %d %d %d %X",
+			&ignored,
+			&localEndpoint,
+			&remoteEndpoint,
+			&entry.State,
+			&entry.TxQueue,
+			&entry.RxQueue,
+			&entry.Tr,
+			&entry.TimerWhen,
+			&entry.Retrnsmt,
+			&entry.UID,
+			&entry.Timeout,
+			&entry.Inode,
+			&entry.Ref,
+			&entry.Pointer,
+		)
+		if err != nil {
+			return nil, err
+		}
 
-	for br.Scan() {
-		var e SockTabEntry
-		line := br.Text()
-		// Skip comments
-		if i := strings.Index(line, "#"); i >= 0 {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 12 {
-			return nil, fmt.Errorf("netstat: not enough fields: %d, %v", len(fields), fields)
-		}
-		addr, err := parseAddr(fields[1])
+		entry.LocalEndpoint, err = parseAddr(localEndpoint)
 		if err != nil {
 			return nil, err
 		}
-		e.LocalAddr = addr
-		addr, err = parseAddr(fields[2])
+		entry.RemoteEndpoint, err = parseAddr(remoteEndpoint)
 		if err != nil {
 			return nil, err
 		}
-		e.RemoteAddr = addr
-		u, err := strconv.ParseUint(fields[3], 16, 8)
-		if err != nil {
-			return nil, err
-		}
-		e.State = SkState(u)
-		u, err = strconv.ParseUint(fields[7], 10, 32)
-		if err != nil {
-			return nil, err
-		}
-		e.UID = uint32(u)
-		e.ino = fields[9]
-		e.Proto = proto
-		if accept(&e) {
-			tab = append(tab, e)
+		entry.Proto = proto
+		if accept(&entry) {
+			sockTab = append(sockTab, entry)
 		}
 	}
-	return tab, br.Err()
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return sockTab, nil
 }
 
 type procFd struct {
@@ -181,6 +203,34 @@ func getProcName(s []byte) string {
 	return string(s[i+1 : j])
 }
 
+var processCache sync.Map
+
+func (p *procFd) getProcess() (*Process, error) {
+	cached, ok := processCache.Load(p.base)
+	if ok {
+		return cached.(*Process), nil
+	}
+
+	stat, err := os.Open(path.Join(p.base, "stat"))
+	if err != nil {
+		return nil, err
+	}
+	defer stat.Close()
+
+	var buf [1024]byte
+	n, err := stat.Read(buf[:])
+	if err != nil {
+		return nil, err
+	}
+	z := bytes.SplitN(buf[:n], []byte(" "), 3)
+	name := getProcName(z[1])
+	process := &Process{p.pid, name}
+
+	processCache.Store(p.base, process)
+
+	return process, nil
+}
+
 func (p *procFd) iterFdDir() {
 	// link Name is of the form socket:[5860846]
 	fddir := path.Join(p.base, "/fd")
@@ -188,7 +238,6 @@ func (p *procFd) iterFdDir() {
 	if err != nil {
 		return
 	}
-	var buf [128]byte
 
 	for _, file := range fi {
 		fd := path.Join(fddir, file.Name())
@@ -196,34 +245,14 @@ func (p *procFd) iterFdDir() {
 		if err != nil || !strings.HasPrefix(lname, sockPrefix) {
 			continue
 		}
-
 		for i := range p.sktab {
 			sk := &p.sktab[i]
-			ss := sockPrefix + sk.ino + "]"
+			ss := sockPrefix + strconv.FormatUint(sk.Inode, 10) + "]"
 			if ss != lname {
 				continue
 			}
 			if p.p == nil {
-				if func() error {
-					stat, err := os.Open(path.Join(p.base, "stat"))
-					if err != nil {
-						return err
-					}
-					defer stat.Close()
-
-					n, err := stat.Read(buf[:])
-
-					if err != nil {
-						return err
-					}
-					z := bytes.SplitN(buf[:n], []byte(" "), 3)
-					name := getProcName(z[1])
-					p.p = &Process{p.pid, name}
-
-					return nil
-				}() != nil {
-					return
-				}
+				p.p, _ = p.getProcess()
 			}
 			sk.Process = p.p
 		}
@@ -237,6 +266,26 @@ func extractProcInfo(sktab []SockTabEntry) {
 		return
 	}
 
+	// Create a channel to send PIDs to worker goroutines.
+	pidCh := make(chan int, len(fi))
+
+	// Create a wait group to wait for all worker goroutines to finish.
+	var wg sync.WaitGroup
+	wg.Add(runtime.NumCPU())
+
+	// Start worker goroutines.
+	for i := 0; i < runtime.NumCPU(); i++ {
+		go func() {
+			defer wg.Done()
+			for pid := range pidCh {
+				base := path.Join(basedir, strconv.Itoa(pid))
+				proc := procFd{base: base, pid: pid, sktab: sktab}
+				proc.iterFdDir()
+			}
+		}()
+	}
+
+	// Send PIDs to worker goroutines.
 	for _, file := range fi {
 		if !file.IsDir() {
 			continue
@@ -245,23 +294,56 @@ func extractProcInfo(sktab []SockTabEntry) {
 		if err != nil {
 			continue
 		}
-		base := path.Join(basedir, file.Name())
-		proc := procFd{base: base, pid: pid, sktab: sktab}
-		proc.iterFdDir()
+		pidCh <- pid
 	}
+
+	// Close the PID channel to signal to worker goroutines that no more PIDs will be sent.
+	close(pidCh)
+
+	// Wait for all worker goroutines to finish.
+	wg.Wait()
 }
 
 // Netstat - collect information about network port status
-func Netstat(fn AcceptFn) ([]SockTabEntry, error) {
+func Netstat(ctx context.Context, fn AcceptFn) ([]SockTabEntry, error) {
 	files := []string{pathTCPTab, pathTCP6Tab, pathUDPTab, pathUDP6Tab}
-	var combinedTabs []SockTabEntry
 
-	for _, file := range files {
-		tabs, err := openFileStream(file, fn)
-		if err != nil {
-			return nil, err
+	// Create a channel for each file to receive its results.
+	chs := make([]chan []SockTabEntry, len(files))
+	for i := range chs {
+		chs[i] = make(chan []SockTabEntry)
+	}
+
+	// Launch a goroutine for each file.
+	for i, file := range files {
+		go func(i int, file string) {
+			select {
+			case <-ctx.Done():
+				// If the context is cancelled, send an empty slice and return.
+				chs[i] <- []SockTabEntry{}
+				return
+			default:
+				tabs, err := openFileStream(file, fn)
+				if err != nil {
+					// Send an empty slice if there was an error.
+					chs[i] <- []SockTabEntry{}
+					return
+				}
+				chs[i] <- tabs
+			}
+		}(i, file)
+	}
+
+	// Collect the results from each channel in order and append them to combinedTabs.
+	var combinedTabs []SockTabEntry
+	for _, ch := range chs {
+		select {
+		case <-ctx.Done():
+			// If the context is cancelled, return immediately with the current result.
+			return combinedTabs, ctx.Err()
+		case tabs := <-ch:
+			combinedTabs = append(combinedTabs, tabs...)
 		}
-		combinedTabs = append(combinedTabs, tabs...)
 	}
 
 	if len(combinedTabs) != 0 {
@@ -278,7 +360,7 @@ func openFileStream(file string, fn AcceptFn) ([]SockTabEntry, error) {
 	}
 	defer f.Close()
 	proto, _ := strings.CutPrefix(file, "/proc/net/")
-	tabs, err := parseSocktab(f, fn, proto)
+	tabs, err := parseSockTab(f, fn, proto)
 	if err != nil {
 		return nil, err
 	}
