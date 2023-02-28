@@ -72,7 +72,17 @@ func main() {
 		cancel()
 	}()
 	if proto&protoIPv4 == protoIPv4 {
-		tabs, err := netstat.Netstat(ctx, fn)
+		tabs, err := netstat.Netstat(ctx, netstat.EnableFeatures{
+			TCP:      true,
+			TCP6:     true,
+			UDP:      true,
+			UDP6:     true,
+			UDPLite:  true,
+			UDPLite6: true,
+			Raw:      true,
+			Raw6:     true,
+			PID:      true,
+		}, fn)
 		if err == nil {
 			displaySockInfo(tabs)
 		} else {
@@ -105,6 +115,6 @@ func displaySockInfo(s []netstat.SockTabEntry) {
 		}
 		saddr := lookup(e.LocalEndpoint)
 		daddr := lookup(e.RemoteEndpoint)
-		fmt.Printf("%-5s %-23.23s %-23.23s %-12s %-16s\n", e.Proto, saddr, daddr, e.State, p)
+		fmt.Printf("%-5s %-23.23s %-23.23s %-12s %-16s\n", e.Transport, saddr, daddr, e.State, p)
 	}
 }

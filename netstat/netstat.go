@@ -19,7 +19,7 @@ func (s *SockEndpoint) String() string {
 // Kernel >=5.15
 type SockTabEntry struct {
 	// Layer4 protocol, tcp, tcp6, udp or udp6
-	Proto string
+	Transport string
 	// Local IPv4 address + Port
 	LocalEndpoint *SockEndpoint
 	// Remote IPv4 address + Port
@@ -81,3 +81,15 @@ type AcceptFn func(*SockTabEntry) bool
 
 // NoopFilter - a test function returning true for all elements
 func NoopFilter(*SockTabEntry) bool { return true }
+
+type EnableFeatures struct {
+	TCP      bool
+	TCP6     bool
+	UDP      bool
+	UDP6     bool
+	UDPLite  bool
+	UDPLite6 bool
+	Raw      bool
+	Raw6     bool
+	PID      bool
+}

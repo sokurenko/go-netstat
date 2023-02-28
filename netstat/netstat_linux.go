@@ -20,10 +20,14 @@ import (
 )
 
 const (
-	pathTCPTab  = "/proc/net/tcp"
-	pathTCP6Tab = "/proc/net/tcp6"
-	pathUDPTab  = "/proc/net/udp"
-	pathUDP6Tab = "/proc/net/udp6"
+	pathTCPTab      = "/proc/net/tcp"
+	pathTCP6Tab     = "/proc/net/tcp6"
+	pathUDPTab      = "/proc/net/udp"
+	pathUDP6Tab     = "/proc/net/udp6"
+	pathUDPLiteTab  = "/proc/net/udplite"
+	pathUDPLite6Tab = "/proc/net/udplite6"
+	pathRawTab      = "/proc/net/raw"
+	pathRaw6Tab     = "/proc/net/raw6"
 
 	ipv4StrLen = 8
 	ipv6StrLen = 32
@@ -133,7 +137,7 @@ func parseAddr(s string) (*SockEndpoint, error) {
 	return &SockEndpoint{IP: ip, Port: uint16(v)}, nil
 }
 
-func parseSockTab(reader io.Reader, accept AcceptFn, proto string) ([]SockTabEntry, error) {
+func parseSockTab(reader io.Reader, accept AcceptFn, transport string) ([]SockTabEntry, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Scan()
 
@@ -142,9 +146,9 @@ func parseSockTab(reader io.Reader, accept AcceptFn, proto string) ([]SockTabEnt
 		line := scanner.Text()
 		var entry SockTabEntry
 		var localEndpoint, remoteEndpoint string
-		var ignored int64
+		var index int64
 		_, err := fmt.Sscanf(line, "%d: %s %s %X %X:%X %d:%X %X %d %d %d %d %X",
-			&ignored,
+			&index,
 			&localEndpoint,
 			&remoteEndpoint,
 			&entry.State,
@@ -171,7 +175,7 @@ func parseSockTab(reader io.Reader, accept AcceptFn, proto string) ([]SockTabEnt
 		if err != nil {
 			return nil, err
 		}
-		entry.Proto = proto
+		entry.Transport = transport
 		if accept(&entry) {
 			sockTab = append(sockTab, entry)
 		}
@@ -304,10 +308,38 @@ func extractProcInfo(sktab []SockTabEntry) {
 	wg.Wait()
 }
 
-// Netstat - collect information about network port status
-func Netstat(ctx context.Context, fn AcceptFn) ([]SockTabEntry, error) {
-	files := []string{pathTCPTab, pathTCP6Tab, pathUDPTab, pathUDP6Tab}
+func procFiles(feature EnableFeatures) []string {
+	var files []string
+	if feature.TCP {
+		files = append(files, pathTCPTab)
+	}
+	if feature.TCP6 {
+		files = append(files, pathTCP6Tab)
+	}
+	if feature.UDP {
+		files = append(files, pathUDPTab)
+	}
+	if feature.UDP6 {
+		files = append(files, pathUDP6Tab)
+	}
+	if feature.UDPLite {
+		files = append(files, pathUDPLiteTab)
+	}
+	if feature.UDPLite6 {
+		files = append(files, pathUDPLite6Tab)
+	}
+	if feature.Raw {
+		files = append(files, pathRawTab)
+	}
+	if feature.Raw6 {
+		files = append(files, pathRaw6Tab)
+	}
+	return files
+}
 
+// Netstat - collect information about network port status
+func Netstat(ctx context.Context, feature EnableFeatures, fn AcceptFn) ([]SockTabEntry, error) {
+	files := procFiles(feature)
 	// Create a channel for each file to receive its results.
 	chs := make([]chan []SockTabEntry, len(files))
 	for i := range chs {
@@ -346,7 +378,7 @@ func Netstat(ctx context.Context, fn AcceptFn) ([]SockTabEntry, error) {
 		}
 	}
 
-	if len(combinedTabs) != 0 {
+	if feature.PID && len(combinedTabs) != 0 {
 		extractProcInfo(combinedTabs)
 	}
 
@@ -359,8 +391,8 @@ func openFileStream(file string, fn AcceptFn) ([]SockTabEntry, error) {
 		return nil, err
 	}
 	defer f.Close()
-	proto, _ := strings.CutPrefix(file, "/proc/net/")
-	tabs, err := parseSockTab(f, fn, proto)
+	transport := file[strings.LastIndex(file, "/")+1:]
+	tabs, err := parseSockTab(f, fn, transport)
 	if err != nil {
 		return nil, err
 	}
