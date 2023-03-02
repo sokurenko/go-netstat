@@ -46,8 +46,6 @@ type SockTabEntry struct {
 	Ref uint64
 	// location of socket in memory
 	Pointer uint64
-	// retransmit timeout
-	Drops   uint64
 	Process *Process
 }
 

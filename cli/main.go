@@ -12,17 +12,18 @@ import (
 )
 
 var (
-	listening = flag.Bool("lis", false, "display only listening sockets")
-	all       = flag.Bool("all", false, "display both listening and non-listening sockets")
-	resolve   = flag.Bool("res", false, "lookup symbolic names for host addresses")
+	listening = flag.Bool("l", false, "display listening server sockets")
+	all       = flag.Bool("a", false, "display all sockets (default: connected)")
+	numeric   = flag.Bool("n", true, "don't resolve names")
 	ipv4      = flag.Bool("4", false, "display only IPv4 sockets")
 	ipv6      = flag.Bool("6", false, "display only IPv6 sockets")
-	help      = flag.Bool("help", false, "display this help screen")
-)
+	pid       = flag.Bool("p", false, "display PID/Program name for sockets")
+	tcp       = flag.Bool("t", false, "display tcp sockets")
+	udp       = flag.Bool("u", false, "display udp sockets")
+	udplite   = flag.Bool("U", false, "display udplite sockets")
+	raw       = flag.Bool("w", false, "display raw sockets")
 
-const (
-	protoIPv4 = 0x01
-	protoIPv6 = 0x02
+	help = flag.Bool("help", false, "display this help screen")
 )
 
 func main() {
@@ -33,17 +34,38 @@ func main() {
 		os.Exit(0)
 	}
 
-	var proto uint
-	if *ipv4 {
-		proto |= protoIPv4
+	var features netstat.EnableFeatures
+
+	if *tcp || *udp || *udplite || *raw {
+		features.TCP = *tcp
+		features.TCP6 = *tcp
+		features.UDP = *udp
+		features.TCP6 = *tcp
+		features.UDPLite = *udplite
+		features.UDPLite6 = *udplite
+		features.Raw = *raw
+		features.Raw6 = *raw
+	} else {
+		// Nothing set, default behaviour
+		features.TCP = true
+		features.TCP6 = true
+		features.UDP = true
+		features.TCP6 = true
 	}
-	if *ipv6 {
-		proto |= protoIPv6
+	if *ipv4 && !*ipv6 {
+		features.TCP6 = false
+		features.UDP6 = false
+		features.UDPLite6 = false
+		features.Raw6 = false
 	}
-	if proto == 0x00 {
-		proto = protoIPv4 | protoIPv6
+	if *ipv6 && !*ipv4 {
+		features.TCP = false
+		features.UDP = false
+		features.UDPLite = false
+		features.Raw = false
 	}
 
+	features.PID = *pid
 	if os.Geteuid() != 0 {
 		fmt.Println("Not all processes could be identified, you would have to be root to see it all.")
 	}
@@ -71,23 +93,12 @@ func main() {
 		<-sig
 		cancel()
 	}()
-	if proto&protoIPv4 == protoIPv4 {
-		tabs, err := netstat.Netstat(ctx, netstat.EnableFeatures{
-			TCP:      true,
-			TCP6:     true,
-			UDP:      true,
-			UDP6:     true,
-			UDPLite:  true,
-			UDPLite6: true,
-			Raw:      true,
-			Raw6:     true,
-			PID:      true,
-		}, fn)
-		if err == nil {
-			displaySockInfo(tabs)
-		} else {
-			fmt.Print(err)
-		}
+
+	tabs, err := netstat.Netstat(ctx, features, fn)
+	if err == nil {
+		displaySockInfo(tabs)
+	} else {
+		fmt.Print(err)
 	}
 
 }
@@ -96,7 +107,7 @@ func displaySockInfo(s []netstat.SockTabEntry) {
 	lookup := func(skaddr *netstat.SockEndpoint) string {
 		const IPv4Strlen = 17
 		addr := skaddr.IP.String()
-		if *resolve {
+		if !*numeric {
 			names, err := net.LookupAddr(addr)
 			if err == nil && len(names) > 0 {
 				addr = names[0]
