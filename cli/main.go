@@ -7,6 +7,8 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 
 	"github.com/nberlee/go-netstat/netstat"
 )
@@ -23,8 +25,22 @@ var (
 	udplite   = flag.Bool("U", false, "display udplite sockets")
 	raw       = flag.Bool("w", false, "display raw sockets")
 
-	help = flag.Bool("help", false, "display this help screen")
+	help   = flag.Bool("help", false, "display this help screen")
+	nsPids = flag.String("pids", "", "comma separated list of pids in different network namespaces")
 )
+
+func commaStringToUint32Array(s string) ([]uint32, error) {
+	strValues := strings.Split(s, ",")
+	uint32Values := make([]uint32, len(strValues))
+	for i, strValue := range strValues {
+		uint32Value, err := strconv.ParseUint(strValue, 10, 32)
+		if err != nil {
+			return nil, err
+		}
+		uint32Values[i] = uint32(uint32Value)
+	}
+	return uint32Values, nil
+}
 
 func main() {
 	flag.Parse()
@@ -40,7 +56,7 @@ func main() {
 		features.TCP = *tcp
 		features.TCP6 = *tcp
 		features.UDP = *udp
-		features.TCP6 = *tcp
+		features.UDP6 = *udp
 		features.UDPLite = *udplite
 		features.UDPLite6 = *udplite
 		features.Raw = *raw
@@ -50,7 +66,7 @@ func main() {
 		features.TCP = true
 		features.TCP6 = true
 		features.UDP = true
-		features.TCP6 = true
+		features.UDP6 = true
 	}
 	if *ipv4 && !*ipv6 {
 		features.TCP6 = false
@@ -66,10 +82,18 @@ func main() {
 	}
 
 	features.PID = *pid
+
+	if *nsPids != "" {
+		features.NsPids, _ = commaStringToUint32Array(*nsPids)
+		if len(features.NsPids) == 1 {
+			features.NoHostNetwork = true
+		}
+	}
+
 	if os.Geteuid() != 0 {
 		fmt.Println("Not all processes could be identified, you would have to be root to see it all.")
 	}
-	fmt.Printf("Proto %-23s %-23s %-12s %-16s\n", "Local Addr", "Foreign Addr", "State", "PID/Program name")
+	fmt.Printf("Proto %-23s %-23s %-12s %-16s %-6s\n", "Local Addr", "Foreign Addr", "State", "PID/Program name", "nsNetPid")
 
 	var fn netstat.AcceptFn
 
@@ -126,6 +150,6 @@ func displaySockInfo(s []netstat.SockTabEntry) {
 		}
 		saddr := lookup(e.LocalEndpoint)
 		daddr := lookup(e.RemoteEndpoint)
-		fmt.Printf("%-5s %-23.23s %-23.23s %-12s %-16s\n", e.Transport, saddr, daddr, e.State, p)
+		fmt.Printf("%-5s %-23.23s %-23.23s %-12s %-16s %-6d\n", e.Transport, saddr, daddr, e.State, p, e.PodPid)
 	}
 }

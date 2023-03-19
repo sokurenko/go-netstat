@@ -335,7 +335,7 @@ func TestParseSockTab(t *testing.T) {
 			// Convert the input string to an io.Reader
 			inputReader := strings.NewReader(tc.inputStr)
 			// Call the parseSocktab function and store the result
-			result, err := netstat.ParseSockTab(inputReader, tc.acceptFn, "tcp")
+			result, err := netstat.ParseSockTab(inputReader, tc.acceptFn, "tcp", 0)
 
 			// Check if the function call returned an error
 			if err != nil && tc.expectedError == nil {

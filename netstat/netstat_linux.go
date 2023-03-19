@@ -20,14 +20,15 @@ import (
 )
 
 const (
-	pathTCPTab      = "/proc/net/tcp"
-	pathTCP6Tab     = "/proc/net/tcp6"
-	pathUDPTab      = "/proc/net/udp"
-	pathUDP6Tab     = "/proc/net/udp6"
-	pathUDPLiteTab  = "/proc/net/udplite"
-	pathUDPLite6Tab = "/proc/net/udplite6"
-	pathRawTab      = "/proc/net/raw"
-	pathRaw6Tab     = "/proc/net/raw6"
+	procPath        = "/proc"
+	pathTCPTab      = "net/tcp"
+	pathTCP6Tab     = "net/tcp6"
+	pathUDPTab      = "net/udp"
+	pathUDP6Tab     = "net/udp6"
+	pathUDPLiteTab  = "net/udplite"
+	pathUDPLite6Tab = "net/udplite6"
+	pathRawTab      = "net/raw"
+	pathRaw6Tab     = "net/raw6"
 
 	ipv4StrLen = 8
 	ipv6StrLen = 32
@@ -137,7 +138,7 @@ func parseAddr(s string) (*SockEndpoint, error) {
 	return &SockEndpoint{IP: ip, Port: uint16(v)}, nil
 }
 
-func parseSockTab(reader io.Reader, accept AcceptFn, transport string) ([]SockTabEntry, error) {
+func parseSockTab(reader io.Reader, accept AcceptFn, transport string, podPid uint32) ([]SockTabEntry, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Scan()
 
@@ -176,6 +177,7 @@ func parseSockTab(reader io.Reader, accept AcceptFn, transport string) ([]SockTa
 			return nil, err
 		}
 		entry.Transport = transport
+		entry.PodPid = podPid
 		if accept(&entry) {
 			sockTab = append(sockTab, entry)
 		}
@@ -237,7 +239,7 @@ func (p *procFd) getProcess() (*Process, error) {
 
 func (p *procFd) iterFdDir() {
 	// link Name is of the form socket:[5860846]
-	fddir := path.Join(p.base, "/fd")
+	fddir := path.Join(p.base, "fd")
 	fi, err := os.ReadDir(fddir)
 	if err != nil {
 		return
@@ -264,8 +266,7 @@ func (p *procFd) iterFdDir() {
 }
 
 func extractProcInfo(sktab []SockTabEntry) {
-	const basedir = "/proc"
-	fi, err := os.ReadDir(basedir)
+	fi, err := os.ReadDir(procPath)
 	if err != nil {
 		return
 	}
@@ -282,7 +283,7 @@ func extractProcInfo(sktab []SockTabEntry) {
 		go func() {
 			defer wg.Done()
 			for pid := range pidCh {
-				base := path.Join(basedir, strconv.Itoa(pid))
+				base := path.Join(procPath, strconv.Itoa(pid))
 				proc := procFd{base: base, pid: pid, sktab: sktab}
 				proc.iterFdDir()
 			}
@@ -310,29 +311,41 @@ func extractProcInfo(sktab []SockTabEntry) {
 
 func procFiles(feature EnableFeatures) []string {
 	var files []string
-	if feature.TCP {
-		files = append(files, pathTCPTab)
+	pids := make([]string, len(feature.NsPids))
+
+	for i, uint32Value := range feature.NsPids {
+		pids[i] = strconv.Itoa(int(uint32Value))
 	}
-	if feature.TCP6 {
-		files = append(files, pathTCP6Tab)
+
+	if !feature.NoHostNetwork {
+		pids = append(pids, "")
 	}
-	if feature.UDP {
-		files = append(files, pathUDPTab)
-	}
-	if feature.UDP6 {
-		files = append(files, pathUDP6Tab)
-	}
-	if feature.UDPLite {
-		files = append(files, pathUDPLiteTab)
-	}
-	if feature.UDPLite6 {
-		files = append(files, pathUDPLite6Tab)
-	}
-	if feature.Raw {
-		files = append(files, pathRawTab)
-	}
-	if feature.Raw6 {
-		files = append(files, pathRaw6Tab)
+	for _, pid := range pids {
+		basePath := path.Join(procPath, pid)
+		if feature.TCP {
+			files = append(files, path.Join(basePath, pathTCPTab))
+		}
+		if feature.TCP6 {
+			files = append(files, path.Join(basePath, pathTCP6Tab))
+		}
+		if feature.UDP {
+			files = append(files, path.Join(basePath, pathUDPTab))
+		}
+		if feature.UDP6 {
+			files = append(files, path.Join(basePath, pathUDP6Tab))
+		}
+		if feature.UDPLite {
+			files = append(files, path.Join(basePath, pathUDPLiteTab))
+		}
+		if feature.UDPLite6 {
+			files = append(files, path.Join(basePath, pathUDPLite6Tab))
+		}
+		if feature.Raw {
+			files = append(files, path.Join(basePath, pathRawTab))
+		}
+		if feature.Raw6 {
+			files = append(files, path.Join(basePath, pathRaw6Tab))
+		}
 	}
 	return files
 }
@@ -391,8 +404,10 @@ func openFileStream(file string, fn AcceptFn) ([]SockTabEntry, error) {
 		return nil, err
 	}
 	defer f.Close()
-	transport := file[strings.LastIndex(file, "/")+1:]
-	tabs, err := parseSockTab(f, fn, transport)
+	_, transport := path.Split(file)
+	podPid, _ := strconv.ParseUint(strings.Split(file, "/")[2], 10, 32)
+
+	tabs, err := parseSockTab(f, fn, transport, uint32(podPid))
 	if err != nil {
 		return nil, err
 	}

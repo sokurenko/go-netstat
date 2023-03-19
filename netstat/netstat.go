@@ -47,6 +47,7 @@ type SockTabEntry struct {
 	// location of socket in memory
 	Pointer uint64
 	Process *Process
+	PodPid  uint32
 }
 
 // Process holds the PID and process Name to which each socket belongs
@@ -81,13 +82,15 @@ type AcceptFn func(*SockTabEntry) bool
 func NoopFilter(*SockTabEntry) bool { return true }
 
 type EnableFeatures struct {
-	TCP      bool
-	TCP6     bool
-	UDP      bool
-	UDP6     bool
-	UDPLite  bool
-	UDPLite6 bool
-	Raw      bool
-	Raw6     bool
-	PID      bool
+	TCP           bool
+	TCP6          bool
+	UDP           bool
+	UDP6          bool
+	UDPLite       bool
+	UDPLite6      bool
+	Raw           bool
+	Raw6          bool
+	PID           bool
+	NoHostNetwork bool
+	NsPids        []uint32
 }
