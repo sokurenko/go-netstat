@@ -17,6 +17,7 @@ var (
 	listening = flag.Bool("l", false, "display listening server sockets")
 	all       = flag.Bool("a", false, "display all sockets (default: connected)")
 	numeric   = flag.Bool("n", true, "don't resolve names")
+	verbose   = flag.Bool("v", false, "display sockets of all supported transport protocols")
 	ipv4      = flag.Bool("4", false, "display only IPv4 sockets")
 	ipv6      = flag.Bool("6", false, "display only IPv6 sockets")
 	pid       = flag.Bool("p", false, "display PID/Program name for sockets")
@@ -24,9 +25,10 @@ var (
 	udp       = flag.Bool("u", false, "display udp sockets")
 	udplite   = flag.Bool("U", false, "display udplite sockets")
 	raw       = flag.Bool("w", false, "display raw sockets")
-
-	help   = flag.Bool("help", false, "display this help screen")
-	nsPids = flag.String("pids", "", "comma separated list of pids in different network namespaces")
+	netNsName = flag.String("netns", "", "comma separated list of network namespace")
+	allNetNs  = flag.Bool("allnetns", false, "all network namespaces")
+	help      = flag.Bool("help", false, "display this help screen")
+	netNsPids = flag.String("pids", "", "comma separated list of pids in different network namespaces")
 )
 
 func commaStringToUint32Array(s string) ([]uint32, error) {
@@ -52,7 +54,16 @@ func main() {
 
 	var features netstat.EnableFeatures
 
-	if *tcp || *udp || *udplite || *raw {
+	if *verbose {
+		features.TCP = true
+		features.TCP6 = true
+		features.UDP = true
+		features.UDP6 = true
+		features.UDPLite = true
+		features.UDPLite6 = true
+		features.Raw = true
+		features.Raw6 = true
+	} else if *tcp || *udp || *udplite || *raw {
 		features.TCP = *tcp
 		features.TCP6 = *tcp
 		features.UDP = *udp
@@ -82,10 +93,18 @@ func main() {
 	}
 
 	features.PID = *pid
+	features.AllNetNs = *allNetNs
 
-	if *nsPids != "" {
-		features.NsPids, _ = commaStringToUint32Array(*nsPids)
-		if len(features.NsPids) == 1 {
+	if *netNsPids != "" {
+		features.NetNsPids, _ = commaStringToUint32Array(*netNsPids)
+		if len(features.NetNsPids) == 1 {
+			features.NoHostNetwork = true
+		}
+	}
+
+	if *netNsName != "" {
+		features.NetNsName = strings.Split(*netNsName, ",")
+		if len(features.NetNsName) == 1 {
 			features.NoHostNetwork = true
 		}
 	}
@@ -93,7 +112,7 @@ func main() {
 	if os.Geteuid() != 0 {
 		fmt.Println("Not all processes could be identified, you would have to be root to see it all.")
 	}
-	fmt.Printf("Proto %-23s %-23s %-12s %-16s %-6s\n", "Local Addr", "Foreign Addr", "State", "PID/Program name", "nsNetPid")
+	fmt.Printf("Proto %-23s %-23s %-12s %-16s %-6s\n", "Local Addr", "Foreign Addr", "State", "PID/Program name", "nsNet")
 
 	var fn netstat.AcceptFn
 
@@ -150,6 +169,6 @@ func displaySockInfo(s []netstat.SockTabEntry) {
 		}
 		saddr := lookup(e.LocalEndpoint)
 		daddr := lookup(e.RemoteEndpoint)
-		fmt.Printf("%-5s %-23.23s %-23.23s %-12s %-16s %-6d\n", e.Transport, saddr, daddr, e.State, p, e.PodPid)
+		fmt.Printf("%-5s %-23.23s %-23.23s %-12s %-16s %-6s\n", e.Transport, saddr, daddr, e.State, p, e.NetNS)
 	}
 }

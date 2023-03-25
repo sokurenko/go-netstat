@@ -4,23 +4,24 @@ package netstat
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"os"
 	"path"
-	"runtime"
 	"strconv"
 	"strings"
-	"sync"
+
+	"github.com/nberlee/go-netstat/common"
+	"github.com/nberlee/go-netstat/netns"
+	"github.com/nberlee/go-netstat/processes"
 )
 
 const (
-	procPath        = "/proc"
 	pathTCPTab      = "net/tcp"
 	pathTCP6Tab     = "net/tcp6"
 	pathUDPTab      = "net/udp"
@@ -36,18 +37,21 @@ const (
 
 // Socket states
 const (
-	Established SkState = 0x01
-	SynSent     SkState = 0x02
-	SynRecv     SkState = 0x03
-	FinWait1    SkState = 0x04
-	FinWait2    SkState = 0x05
-	TimeWait    SkState = 0x06
-	Close       SkState = 0x07
-	CloseWait   SkState = 0x08
-	LastAck     SkState = 0x09
-	Listen      SkState = 0x0a
-	Closing     SkState = 0x0b
+	Established SkState = iota + 1
+	SynSent
+	SynRecv
+	FinWait1
+	FinWait2
+	TimeWait
+	Close
+	CloseWait
+	LastAck
+	Listen
+	Closing
 )
+
+var fdProcess = make(map[uint64]*common.Process)
+var pidNetNS map[uint32]string
 
 var skStates = [...]string{
 	"UNKNOWN",
@@ -80,11 +84,6 @@ var TimerActives = [...]string{
 	"TimeWait",   // Unsure how to call this
 	"ProbeTimer", // Unsure how to call this
 }
-
-// Errors returned by gonetstat
-var (
-	ErrNotEnoughFields = errors.New("gonetstat: not enough fields in the line")
-)
 
 func parseIPv4(s string) (net.IP, error) {
 	v, err := strconv.ParseUint(s, 16, 32)
@@ -177,7 +176,14 @@ func parseSockTab(reader io.Reader, accept AcceptFn, transport string, podPid ui
 			return nil, err
 		}
 		entry.Transport = transport
-		entry.PodPid = podPid
+		if podPid != 0 {
+			if netNsName, ok := pidNetNS[podPid]; ok {
+				entry.NetNS = netNsName
+			} else {
+				entry.NetNS = strconv.Itoa(int(podPid))
+			}
+		}
+		entry.Process = fdProcess[entry.Inode]
 		if accept(&entry) {
 			sockTab = append(sockTab, entry)
 		}
@@ -188,171 +194,23 @@ func parseSockTab(reader io.Reader, accept AcceptFn, transport string, podPid ui
 	return sockTab, nil
 }
 
-type procFd struct {
-	base  string
-	pid   int
-	sktab []SockTabEntry
-	p     *Process
-}
-
-const sockPrefix = "socket:["
-
-func getProcName(s []byte) string {
-	i := bytes.Index(s, []byte("("))
-	if i < 0 {
-		return ""
-	}
-	j := bytes.LastIndex(s, []byte(")"))
-	if j < 1 || i+1 >= j {
-		return ""
-	}
-	return string(s[i+1 : j])
-}
-
-var processCache sync.Map
-
-func (p *procFd) getProcess() (*Process, error) {
-	cached, ok := processCache.Load(p.base)
-	if ok {
-		return cached.(*Process), nil
-	}
-
-	stat, err := os.Open(path.Join(p.base, "stat"))
-	if err != nil {
-		return nil, err
-	}
-	defer stat.Close()
-
-	var buf [1024]byte
-	n, err := stat.Read(buf[:])
-	if err != nil {
-		return nil, err
-	}
-	z := bytes.SplitN(buf[:n], []byte(" "), 3)
-	name := getProcName(z[1])
-	process := &Process{p.pid, name}
-
-	processCache.Store(p.base, process)
-
-	return process, nil
-}
-
-func (p *procFd) iterFdDir() {
-	// link Name is of the form socket:[5860846]
-	fddir := path.Join(p.base, "fd")
-	fi, err := os.ReadDir(fddir)
-	if err != nil {
-		return
-	}
-
-	for _, file := range fi {
-		fd := path.Join(fddir, file.Name())
-		lname, err := os.Readlink(fd)
-		if err != nil || !strings.HasPrefix(lname, sockPrefix) {
-			continue
-		}
-		for i := range p.sktab {
-			sk := &p.sktab[i]
-			ss := sockPrefix + strconv.FormatUint(sk.Inode, 10) + "]"
-			if ss != lname {
-				continue
-			}
-			if p.p == nil {
-				p.p, _ = p.getProcess()
-			}
-			sk.Process = p.p
-		}
-	}
-}
-
-func extractProcInfo(sktab []SockTabEntry) {
-	fi, err := os.ReadDir(procPath)
-	if err != nil {
-		return
-	}
-
-	// Create a channel to send PIDs to worker goroutines.
-	pidCh := make(chan int, len(fi))
-
-	// Create a wait group to wait for all worker goroutines to finish.
-	var wg sync.WaitGroup
-	wg.Add(runtime.NumCPU())
-
-	// Start worker goroutines.
-	for i := 0; i < runtime.NumCPU(); i++ {
-		go func() {
-			defer wg.Done()
-			for pid := range pidCh {
-				base := path.Join(procPath, strconv.Itoa(pid))
-				proc := procFd{base: base, pid: pid, sktab: sktab}
-				proc.iterFdDir()
-			}
-		}()
-	}
-
-	// Send PIDs to worker goroutines.
-	for _, file := range fi {
-		if !file.IsDir() {
-			continue
-		}
-		pid, err := strconv.Atoi(file.Name())
-		if err != nil {
-			continue
-		}
-		pidCh <- pid
-	}
-
-	// Close the PID channel to signal to worker goroutines that no more PIDs will be sent.
-	close(pidCh)
-
-	// Wait for all worker goroutines to finish.
-	wg.Wait()
-}
-
-func procFiles(feature EnableFeatures) []string {
-	var files []string
-	pids := make([]string, len(feature.NsPids))
-
-	for i, uint32Value := range feature.NsPids {
-		pids[i] = strconv.Itoa(int(uint32Value))
-	}
-
-	if !feature.NoHostNetwork {
-		pids = append(pids, "")
-	}
-	for _, pid := range pids {
-		basePath := path.Join(procPath, pid)
-		if feature.TCP {
-			files = append(files, path.Join(basePath, pathTCPTab))
-		}
-		if feature.TCP6 {
-			files = append(files, path.Join(basePath, pathTCP6Tab))
-		}
-		if feature.UDP {
-			files = append(files, path.Join(basePath, pathUDPTab))
-		}
-		if feature.UDP6 {
-			files = append(files, path.Join(basePath, pathUDP6Tab))
-		}
-		if feature.UDPLite {
-			files = append(files, path.Join(basePath, pathUDPLiteTab))
-		}
-		if feature.UDPLite6 {
-			files = append(files, path.Join(basePath, pathUDPLite6Tab))
-		}
-		if feature.Raw {
-			files = append(files, path.Join(basePath, pathRawTab))
-		}
-		if feature.Raw6 {
-			files = append(files, path.Join(basePath, pathRaw6Tab))
-		}
-	}
-	return files
-}
-
 // Netstat - collect information about network port status
 func Netstat(ctx context.Context, feature EnableFeatures, fn AcceptFn) ([]SockTabEntry, error) {
-	files := procFiles(feature)
+	var err error
+
+	pids, err := mergePids(feature)
+	if err != nil {
+		return nil, err
+	}
+
+	files := procFiles(feature, pids)
+
+	if feature.PID {
+		fdProcess, err = processes.GetProcessFDs(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
 	// Create a channel for each file to receive its results.
 	chs := make([]chan []SockTabEntry, len(files))
 	for i := range chs {
@@ -391,11 +249,84 @@ func Netstat(ctx context.Context, feature EnableFeatures, fn AcceptFn) ([]SockTa
 		}
 	}
 
-	if feature.PID && len(combinedTabs) != 0 {
-		extractProcInfo(combinedTabs)
+	return combinedTabs, nil
+}
+
+func mergePids(feature EnableFeatures) (pids []string, err error) {
+	if feature.AllNetNs {
+		netNsName, err := netns.GetNetNSNames()
+		if err != nil {
+			// PathError is expected when not running any container or CNI
+			var pathError *fs.PathError
+			if !errors.As(err, &pathError) {
+				return nil, err
+			}
+		}
+
+		feature.NetNsName = netNsName
+		feature.NetNsPids = []uint32{}
 	}
 
-	return combinedTabs, nil
+	pidNetNS = map[uint32]string{}
+	if len(feature.NetNsName) > 0 {
+		pidNetNS = *netns.GetNetNsPids(feature.NetNsName)
+	}
+
+	hostNetNsIndex := 0
+	if !feature.NoHostNetwork {
+		hostNetNsIndex = 1
+	}
+
+	lengthPids := len(pidNetNS) + len(feature.NetNsPids) + hostNetNsIndex
+	pids = make([]string, lengthPids)
+
+	if !feature.NoHostNetwork {
+		pids[0] = ""
+	}
+
+	netNsNameIndex := 0
+
+	for pid := range pidNetNS {
+		pids[netNsNameIndex+hostNetNsIndex] = strconv.Itoa(int(pid))
+		netNsNameIndex++
+	}
+
+	for netNsPidIndex, pid := range feature.NetNsPids {
+		pids[netNsPidIndex+netNsNameIndex+hostNetNsIndex] = strconv.Itoa(int(pid))
+	}
+
+	return pids, nil
+}
+
+func procFiles(feature EnableFeatures, pids []string) (files []string) {
+	for _, pid := range pids {
+		basePath := path.Join(common.ProcPath, pid)
+		if feature.TCP {
+			files = append(files, path.Join(basePath, pathTCPTab))
+		}
+		if feature.TCP6 {
+			files = append(files, path.Join(basePath, pathTCP6Tab))
+		}
+		if feature.UDP {
+			files = append(files, path.Join(basePath, pathUDPTab))
+		}
+		if feature.UDP6 {
+			files = append(files, path.Join(basePath, pathUDP6Tab))
+		}
+		if feature.UDPLite {
+			files = append(files, path.Join(basePath, pathUDPLiteTab))
+		}
+		if feature.UDPLite6 {
+			files = append(files, path.Join(basePath, pathUDPLite6Tab))
+		}
+		if feature.Raw {
+			files = append(files, path.Join(basePath, pathRawTab))
+		}
+		if feature.Raw6 {
+			files = append(files, path.Join(basePath, pathRaw6Tab))
+		}
+	}
+	return files
 }
 
 func openFileStream(file string, fn AcceptFn) ([]SockTabEntry, error) {
