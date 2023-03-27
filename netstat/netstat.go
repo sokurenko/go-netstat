@@ -3,6 +3,8 @@ package netstat
 import (
 	"fmt"
 	"net"
+
+	"github.com/nberlee/go-netstat/common"
 )
 
 // SockEndpoint represents an ip:port pair
@@ -46,18 +48,8 @@ type SockTabEntry struct {
 	Ref uint64
 	// location of socket in memory
 	Pointer uint64
-	Process *Process
-	PodPid  uint32
-}
-
-// Process holds the PID and process Name to which each socket belongs
-type Process struct {
-	Pid  int
-	Name string
-}
-
-func (p *Process) String() string {
-	return fmt.Sprintf("%d/%s", p.Pid, p.Name)
+	Process *common.Process
+	NetNS   string
 }
 
 // SkState type represents socket connection state
@@ -82,15 +74,30 @@ type AcceptFn func(*SockTabEntry) bool
 func NoopFilter(*SockTabEntry) bool { return true }
 
 type EnableFeatures struct {
-	TCP           bool
-	TCP6          bool
-	UDP           bool
-	UDP6          bool
-	UDPLite       bool
-	UDPLite6      bool
-	Raw           bool
-	Raw6          bool
-	PID           bool
+	// TCP sockets and connections
+	TCP bool
+	// TCP6 (ipv6) sockets and connections
+	TCP6 bool
+	// UDP sockets and connections
+	UDP bool
+	// UDP6 (ipv6) sockets and connections
+	UDP6 bool
+	// UDP-Lite sockets and connections
+	UDPLite bool
+	// UDP-Lite6 (ipv6) sockets and connections
+	UDPLite6 bool
+	// Raw sockets and connections
+	Raw bool
+	// Raw6 (ipv6) sockets and connections
+	Raw6 bool
+	// Processes and Programs using sockets
+	PID bool
+	// Disable host network namespace
 	NoHostNetwork bool
-	NsPids        []uint32
+	// All network namespaces
+	AllNetNs bool
+	// Network namespace names using sockets and connections
+	NetNsName []string
+	// Network namespace PIDs using sockets and connections
+	NetNsPids []uint32
 }

@@ -124,55 +124,6 @@ func TestParseAddr(t *testing.T) {
 	}
 }
 
-func TestGetProcName(t *testing.T) {
-	testCases := []struct {
-		input    []byte
-		expected string
-	}{
-		{
-			input:    []byte("(vivaldi-bin)"),
-			expected: "vivaldi-bin",
-		},
-		{
-			input:    []byte(" (vivaldi-bin)"),
-			expected: "vivaldi-bin",
-		},
-		{
-			input:    []byte("160006 (vivaldi-bin)"),
-			expected: "vivaldi-bin",
-		},
-		{
-			input:    []byte("0 (v)"),
-			expected: "v",
-		},
-		{
-			input:    []byte("160006 )vivaldi-bin("),
-			expected: "",
-		},
-		{
-			input:    []byte("160006 )vivaldi-bin"),
-			expected: "",
-		},
-		{
-			input:    []byte("160006 (vivaldi-bin"),
-			expected: "",
-		},
-		{
-			input:    []byte("160006 ()"),
-			expected: "",
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(fmt.Sprintf("Input: %s", tc.input), func(t *testing.T) {
-			result := netstat.GetProcName(tc.input)
-			if result != tc.expected {
-				t.Errorf("Expected result to be %s, but got %s", tc.expected, result)
-			}
-		})
-	}
-}
-
 func TestParseSockTab(t *testing.T) {
 	testCases := []struct {
 		name           string
@@ -328,6 +279,41 @@ func TestParseSockTab(t *testing.T) {
 			expectedLen:    0,
 			expectedError:  fmt.Errorf("expected integer"),
 		},
+		{
+			name:     "No filter raw socket",
+			acceptFn: netstat.NoopFilter,
+			inputStr: `   sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops
+			1: 00000000:0001 00000000:0000 07 00000000:00000000 00:00000000 00000000     0        0 4229902743 2 00000000c5c41b4f 0
+		   17: 0100007F:0011 00000000:0000 07 00000000:00000000 00:00000000 00000000     0        0 4229856103 2 00000000651d476d 0
+`,
+			expectedResult: []netstat.SockTabEntry{
+				{
+					LocalEndpoint: &netstat.SockEndpoint{
+						IP:   net.ParseIP("0.0.0.0"),
+						Port: 1,
+					},
+					RemoteEndpoint: &netstat.SockEndpoint{
+						IP:   net.ParseIP("0.0.0.0"),
+						Port: 0,
+					},
+					State: netstat.Close,
+					UID:   0,
+				},
+				{
+					LocalEndpoint: &netstat.SockEndpoint{
+						IP:   net.ParseIP("127.0.0.1"),
+						Port: 17,
+					},
+					RemoteEndpoint: &netstat.SockEndpoint{
+						IP:   net.ParseIP("0.0.0.0"),
+						Port: 0,
+					},
+					State: netstat.Close,
+					UID:   0,
+				},
+			},
+			expectedLen: 2,
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -335,7 +321,7 @@ func TestParseSockTab(t *testing.T) {
 			// Convert the input string to an io.Reader
 			inputReader := strings.NewReader(tc.inputStr)
 			// Call the parseSocktab function and store the result
-			result, err := netstat.ParseSockTab(inputReader, tc.acceptFn, "tcp", 0)
+			result, err := netstat.ParseSockTab(inputReader, tc.acceptFn, "tcp", 1)
 
 			// Check if the function call returned an error
 			if err != nil && tc.expectedError == nil {
